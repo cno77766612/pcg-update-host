@@ -1,42 +1,31 @@
-private fun uploadFileToRenderServer(file: File) {
-    Thread {
-        try {
-            val boundary = "----Boundary${System.currentTimeMillis()}"
-            val url = URL("https://你的網址.onrender.com/upload")
-            val conn = url.openConnection() as HttpURLConnection
-            conn.requestMethod = "POST"
-            conn.doOutput = true
-            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+from fastapi import FastAPI, UploadFile, Form
+from fastapi.middleware.cors import CORSMiddleware
+import shutil, os, subprocess
 
-            val output = conn.outputStream
-            val writer = output.bufferedWriter()
+app = FastAPI()
 
-            // Part 1: filename field
-            writer.write("--$boundary\r\n")
-            writer.write("Content-Disposition: form-data; name=\"filename\"\r\n\r\n")
-            writer.write(file.name + "\r\n")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-            // Part 2: file content
-            writer.write("--$boundary\r\n")
-            writer.write("Content-Disposition: form-data; name=\"file\"; filename=\"${file.name}\"\r\n")
-            writer.write("Content-Type: text/plain\r\n\r\n")
-            writer.flush()
-            output.write(file.readBytes())
+REPO_PATH = "repo"
+DATA_PATH = os.path.join(REPO_PATH, "data")
 
-            // End boundary
-            output.write("\r\n--$boundary--\r\n".toByteArray())
-            output.flush()
+@app.post("/upload")
+async def upload(file: UploadFile, filename: str = Form(...)):
+    os.makedirs(DATA_PATH, exist_ok=True)
+    save_path = os.path.join(DATA_PATH, filename)
 
-            val responseCode = conn.responseCode
-            runOnUiThread {
-                if (responseCode == 200) {
-                    Toast.makeText(this, "已上傳至 GitHub", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(this, "上傳失敗：$responseCode", Toast.LENGTH_SHORT).show()
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }.start()
-}
+    with open(save_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    try:
+        subprocess.run(["git", "add", f"data/{filename}"], cwd=REPO_PATH, check=True)
+        subprocess.run(["git", "commit", "-m", f"Add {filename}"], cwd=REPO_PATH, check=True)
+        subprocess.run(["git", "push"], cwd=REPO_PATH, check=True)
+        return {"message": "已成功上傳並推送至 GitHub"}
+    except subprocess.CalledProcessError as e:
+        return {"error": str(e)}
